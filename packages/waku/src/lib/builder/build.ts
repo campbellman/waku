@@ -143,6 +143,7 @@ const buildServerBundle = async (
   config: ResolvedConfig,
   entriesFile: string,
   distEntriesFile: string,
+  apiEntryFiles: Record<string, string>,
   commonEntryFiles: Record<string, string>,
   clientEntryFiles: Record<string, string>,
   serverEntryFiles: Record<string, string>,
@@ -202,6 +203,7 @@ const buildServerBundle = async (
           entries: entriesFile,
           [RSDW_SERVER_MODULE]: RSDW_SERVER_MODULE_VALUE,
           [WAKU_CLIENT]: CLIENT_MODULE_MAP[WAKU_CLIENT],
+          ...apiEntryFiles,
           ...commonEntryFiles,
           ...clientEntryFiles,
           ...serverEntryFiles,
@@ -611,6 +613,14 @@ export async function build(options: {
   const distEntriesFile = resolveFileName(
     joinPath(rootDir, config.distDir, config.entriesJs),
   );
+  const apiFile = resolveFileName(
+    joinPath(rootDir, config.srcDir, config.apiJs),
+  );
+  const apiEntryFiles = existsSync(apiFile)
+    ? {
+        [config.apiJs.slice(0, -extname(config.apiJs).length)]: apiFile,
+      }
+    : {};
 
   const { commonEntryFiles, clientEntryFiles, serverEntryFiles } =
     await analyzeEntries(entriesFile);
@@ -619,6 +629,7 @@ export async function build(options: {
     config,
     entriesFile,
     distEntriesFile,
+    apiEntryFiles,
     commonEntryFiles,
     clientEntryFiles,
     serverEntryFiles,

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-
+import type { Hono, MiddlewareHandler } from 'hono';
+import type { Config } from './config.js';
 import type { PathSpec } from './lib/utils/path.js';
 
 type Elements = Record<string, ReactNode>;
@@ -48,6 +49,22 @@ export function defineEntries(
   getSsrConfig?: GetSsrConfig,
 ) {
   return { renderEntries, getBuildConfig, getSsrConfig };
+}
+
+export type Api<SuppliedHono extends Hono = Hono> = (
+  app: SuppliedHono,
+  opts: {
+    middlewareHandlers: MiddlewareHandler<any>[];
+    config: Config;
+  },
+) => Promise<void>;
+
+export function defineApi(api: Api) {
+  return api;
+}
+
+export function defineApiHandler(api: (...a: Parameters<Api>) => Promise<any>) {
+  return api;
 }
 
 export type EntriesDev = {
