@@ -1,20 +1,23 @@
 import path from 'node:path';
-import { existsSync, writeFileSync, unlinkSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { existsSync, unlinkSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { createRequire } from 'node:module';
 import { randomBytes } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 import { Hono } from 'hono';
+import type { Env } from 'hono';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import * as swc from '@swc/core';
 import dotenv from 'dotenv';
 
 import type { Config } from './config.js';
+import type { Api } from './server.js';
 import { resolveConfig } from './lib/config.js';
 import { honoMiddleware as honoDevMiddleware } from './lib/middleware/hono-dev.js';
 import { honoMiddleware as honoPrdMiddleware } from './lib/middleware/hono-prd.js';
 import { build } from './lib/builder/build.js';
+import { extname } from './lib/utils/path.js';
 
 const require = createRequire(new URL('.', import.meta.url));
 
@@ -92,11 +95,26 @@ if (values.version) {
 }
 
 async function runDev(options: { ssr: boolean }) {
+  const resolvedConfig = await resolveConfig(config);
+
+  const middlewareHandler = honoDevMiddleware<Env>({
+    ...options,
+    config,
+    env: process.env as any,
+  });
+
   const app = new Hono();
-  app.use(
-    '*',
-    honoDevMiddleware({ ...options, config, env: process.env as any }),
-  );
+  const api = await loadDevApi();
+  if (api) {
+    const apiOptions = {
+      config: resolvedConfig,
+      middlewareHandlers: [middlewareHandler],
+    };
+    await api(app, apiOptions);
+  } else {
+    app.use('*', middlewareHandler);
+  }
+
   const port = parseInt(process.env.PORT || '3000', 10);
   startServer(app, port);
 }
@@ -124,20 +142,32 @@ async function runBuild(options: { ssr: boolean }) {
 }
 
 async function runStart(options: { ssr: boolean }) {
-  const { distDir, publicDir, entriesJs } = await resolveConfig(config);
-  const loadEntries = () =>
-    import(pathToFileURL(path.resolve(distDir, entriesJs)).toString());
+  const resolvedConfig = await resolveConfig(config);
+  const { distDir, publicDir, entriesJs } = resolvedConfig;
+
+  const staticServeMiddlewareHandler = serveStatic({
+    root: path.join(distDir, publicDir),
+  });
+  const prdMiddlewareHandler = honoPrdMiddleware<Env>({
+    ...options,
+    config,
+    loadEntries: () =>
+      import(pathToFileURL(path.resolve(distDir, entriesJs)).toString()),
+    env: process.env as any,
+  });
+
   const app = new Hono();
-  app.use('*', serveStatic({ root: path.join(distDir, publicDir) }));
-  app.use(
-    '*',
-    honoPrdMiddleware({
-      ...options,
-      config,
-      loadEntries,
-      env: process.env as any,
-    }),
-  );
+  const api = await loadPrdApi();
+  if (api) {
+    const apiOptions = {
+      config: resolvedConfig,
+      middlewareHandlers: [staticServeMiddlewareHandler, prdMiddlewareHandler],
+    };
+    await api(app, apiOptions);
+  } else {
+    app.use('*', staticServeMiddlewareHandler);
+    app.use('*', prdMiddlewareHandler);
+  }
   const port = parseInt(process.env.PORT || '8080', 10);
   startServer(app, port);
 }
@@ -177,22 +207,48 @@ Options:
 `);
 }
 
-// TODO is this a good idea?
+// TODO: should we call `loadApi` directly rather than splitting into two functions?
+const loadPrdApi = () => loadApi('prd');
+const loadDevApi = () => loadApi('dev');
+
+async function loadApi(env: 'dev' | 'prd'): Promise<Api | null> {
+  const { apiJs } = await resolveConfig(config);
+  if (!apiJs) {
+    return null;
+  }
+  const apiJsPath =
+    env === 'prd'
+      ? path.resolve('dist', `${apiJs.slice(0, -extname(apiJs).length)}.js`)
+      : path.resolve('src', apiJs);
+  if (!existsSync(apiJsPath)) {
+    return null;
+  }
+  if (apiJsPath.endsWith('.js')) {
+    return (await import(pathToFileURL(apiJsPath).toString())).api;
+  }
+  return (await loadTsModule(apiJsPath)).api;
+}
+
 async function loadConfig(): Promise<Config> {
   if (!existsSync('waku.config.ts')) {
     return {};
   }
-  const { code } = swc.transformFileSync('waku.config.ts', {
+  return (await loadTsModule('waku.config.ts')).default;
+}
+
+async function loadTsModule(filePath: string): Promise<any> {
+  const { code } = swc.transformFileSync(filePath, {
     swcrc: false,
     jsc: {
       parser: { syntax: 'typescript' },
       target: 'es2022',
     },
   });
+
   const temp = path.resolve(`.temp-${randomBytes(8).toString('hex')}.js`);
   try {
     writeFileSync(temp, code);
-    return (await import(pathToFileURL(temp).toString())).default;
+    return await import(pathToFileURL(temp).toString());
   } finally {
     unlinkSync(temp);
   }

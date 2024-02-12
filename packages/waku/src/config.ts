@@ -50,6 +50,11 @@ export interface Config {
    */
   entriesJs?: string;
   /**
+   * The custom api file relative to srcDir.
+   * Defaults to "api.ts".
+   */
+  apiJs?: string;
+  /**
    * The serve.js file relative distDir.
    * This file is used for deployment.
    * Defaults to "serve.js".
