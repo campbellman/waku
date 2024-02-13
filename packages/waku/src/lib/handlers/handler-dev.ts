@@ -24,6 +24,7 @@ import { rscHmrPlugin, hotUpdate } from '../plugins/vite-plugin-rsc-hmr.js';
 import { rscEnvPlugin } from '../plugins/vite-plugin-rsc-env.js';
 import type { BaseReq, BaseRes, Handler } from './types.js';
 import { mergeUserViteConfig } from '../utils/merge-vite-config.js';
+import { getDevPort } from '../utils/server.js';
 
 export const CLIENT_MODULE_MAP = {
   react: 'react',
@@ -78,7 +79,7 @@ export function createHandler<
           'waku/router/server',
         ],
       },
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: { port: getDevPort() + 1 } },
     });
     const vite = await createViteServer(mergedViteConfig);
     initializeWorker(config);

@@ -15,6 +15,7 @@ import { resolveConfig } from './lib/config.js';
 import { honoMiddleware as honoDevMiddleware } from './lib/middleware/hono-dev.js';
 import { honoMiddleware as honoPrdMiddleware } from './lib/middleware/hono-prd.js';
 import { build } from './lib/builder/build.js';
+import { getDevPort, getPrdPort } from './lib/utils/server.js';
 
 const require = createRequire(new URL('.', import.meta.url));
 
@@ -97,8 +98,7 @@ async function runDev(options: { ssr: boolean }) {
     '*',
     honoDevMiddleware({ ...options, config, env: process.env as any }),
   );
-  const port = parseInt(process.env.PORT || '3000', 10);
-  startServer(app, port);
+  startServer(app, getDevPort());
 }
 
 async function runBuild(options: { ssr: boolean }) {
@@ -138,8 +138,7 @@ async function runStart(options: { ssr: boolean }) {
       env: process.env as any,
     }),
   );
-  const port = parseInt(process.env.PORT || '8080', 10);
-  startServer(app, port);
+  startServer(app, getPrdPort());
 }
 
 async function startServer(app: Hono, port: number) {

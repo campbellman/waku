@@ -133,14 +133,14 @@ function hotImport(vite: ViteDevServer, source: string) {
   if (!sourceSet) {
     sourceSet = new Set();
     pendingMap.set(vite, sourceSet);
-    vite.ws.on('connection', () => {
+    vite.hot.on('connection', () => {
       for (const source of sourceSet!) {
-        vite.ws.send({ type: 'custom', event: 'hot-import', data: source });
+        vite.hot.send({ type: 'custom', event: 'hot-import', data: source });
       }
     });
   }
   sourceSet.add(source);
-  vite.ws.send({ type: 'custom', event: 'hot-import', data: source });
+  vite.hot.send({ type: 'custom', event: 'hot-import', data: source });
 }
 
 const modulePendingMap = new WeakMap<ViteDevServer, Set<ModuleImportResult>>();
@@ -152,7 +152,7 @@ function moduleImport(viteServer: ViteDevServer, result: ModuleImportResult) {
     modulePendingMap.set(viteServer, sourceSet);
   }
   sourceSet.add(result);
-  viteServer.ws.send({ type: 'custom', event: 'module-import', data: result });
+  viteServer.hot.send({ type: 'custom', event: 'module-import', data: result });
 }
 
 async function generateInitialScripts(
@@ -209,9 +209,9 @@ export type HotUpdatePayload =
 
 export function hotUpdate(vite: ViteDevServer, payload: HotUpdatePayload) {
   if (payload.type === 'full-reload') {
-    vite.ws.send(payload);
+    vite.hot.send(payload);
   } else if (payload.event === 'rsc-reload') {
-    vite.ws.send(payload);
+    vite.hot.send(payload);
   } else if (payload.event === 'hot-import') {
     hotImport(vite, payload.data);
   } else if (payload.event === 'module-import') {
