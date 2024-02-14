@@ -18,6 +18,8 @@ type ModuleImportResult = TransformResult & {
   css?: boolean;
 };
 
+const WAKU_ATTR_NAME = 'waku-module-id';
+
 const injectingHmrCode = `
 import { createHotContext as __vite__createHotContext } from "/@vite/client";
 import.meta.hot = __vite__createHotContext(import.meta.url);
@@ -25,19 +27,23 @@ import.meta.hot = __vite__createHotContext(import.meta.url);
 if (import.meta.hot && !globalThis.__WAKU_HMR_CONFIGURED__) {
   globalThis.__WAKU_HMR_CONFIGURED__ = true;
   import.meta.hot.on('rsc-reload', () => {
+    const wakuTags = document.querySelectorAll('[${WAKU_ATTR_NAME}]')
+    for (let i = 0; i < wakuTags.length; i++) {
+      wakuTags[i].remove();
+    }
+    const pathsToPrune = Array.from(import.meta.hot.hmrClient.pruneMap.keys())
+    import.meta.hot.hmrClient.prunePaths(pathsToPrune)
     globalThis.__WAKU_RSC_RELOAD_LISTENERS__?.forEach((l) => l());
   });
-  import.meta.hot.on('hot-import', (data) => import(/* @vite-ignore */ data));
   import.meta.hot.on('module-import', (data) => {
-    // remove element with the same 'waku-module-id'
-    let script = document.querySelector('script[waku-module-id="' + data.id + '"]');
-    let style = document.querySelector('style[waku-module-id="' + data.id + '"]');
+    let script = document.querySelector('script[${WAKU_ATTR_NAME}="' + data.id + '"]');
+    let style = document.querySelector('style[${WAKU_ATTR_NAME}="' + data.id + '"]');
     script?.remove();
     const code = data.code;
     script = document.createElement('script');
     script.type = 'module';
     script.text = code;
-    script.setAttribute('waku-module-id', data.id);
+    script.setAttribute('${WAKU_ATTR_NAME}', data.id);
     document.head.appendChild(script);
     // avoid HMR flash by first applying the new and removing the old styles 
     if (style) {
@@ -47,6 +53,10 @@ if (import.meta.hot && !globalThis.__WAKU_HMR_CONFIGURED__) {
 }
 `;
 
+function waitForConnection(vite: ViteDevServer) {
+  return new Promise<void>((resolve) => vite.ws.on('connection', resolve));
+}
+
 export function rscHmrPlugin(): Plugin {
   const wakuClientDist = decodeFilePathFromAbsolute(
     joinPath(fileURLToFilePath(import.meta.url), '../../../client.js'),
@@ -54,16 +64,12 @@ export function rscHmrPlugin(): Plugin {
   const wakuRouterClientDist = decodeFilePathFromAbsolute(
     joinPath(fileURLToFilePath(import.meta.url), '../../../router/client.js'),
   );
-  let viteServer: ViteDevServer;
   return {
     name: 'rsc-hmr-plugin',
     enforce: 'post',
-    configureServer(server) {
-      viteServer = server;
-    },
-    async transformIndexHtml() {
+    async transformIndexHtml(_html, ctx) {
       return [
-        ...(await generateInitialScripts(viteServer)),
+        ...(await generateInitialScripts(ctx.server)),
         {
           tag: 'script',
           attrs: { type: 'module', async: true },
@@ -126,40 +132,37 @@ export function rscHmrPlugin(): Plugin {
   };
 }
 
-const pendingMap = new WeakMap<ViteDevServer, Set<string>>();
-
-function hotImport(vite: ViteDevServer, source: string) {
-  let sourceSet = pendingMap.get(vite);
-  if (!sourceSet) {
-    sourceSet = new Set();
-    pendingMap.set(vite, sourceSet);
-    vite.hot.on('connection', () => {
-      for (const source of sourceSet!) {
-        vite.hot.send({ type: 'custom', event: 'hot-import', data: source });
-      }
-    });
-  }
-  sourceSet.add(source);
-  vite.hot.send({ type: 'custom', event: 'hot-import', data: source });
-}
-
 const modulePendingMap = new WeakMap<ViteDevServer, Set<ModuleImportResult>>();
 
-function moduleImport(viteServer: ViteDevServer, result: ModuleImportResult) {
+async function moduleImport(
+  viteServer: ViteDevServer,
+  result: ModuleImportResult,
+) {
   let sourceSet = modulePendingMap.get(viteServer);
   if (!sourceSet) {
     sourceSet = new Set();
     modulePendingMap.set(viteServer, sourceSet);
+    await waitForConnection(viteServer);
+  }
+  if (sourceSet.has(result)) {
+    return;
   }
   sourceSet.add(result);
-  viteServer.hot.send({ type: 'custom', event: 'module-import', data: result });
+  viteServer.hot.send({
+    type: 'custom',
+    event: 'module-import',
+    data: result,
+  });
 }
 
 async function generateInitialScripts(
-  viteServer: ViteDevServer,
+  viteServer: ViteDevServer | undefined,
 ): Promise<HtmlTagDescriptor[]> {
-  const sourceSet = modulePendingMap.get(viteServer);
+  if (!viteServer) {
+    return [];
+  }
 
+  const sourceSet = modulePendingMap.get(viteServer);
   if (!sourceSet) {
     return [];
   }
@@ -185,7 +188,7 @@ async function generateInitialScripts(
       scripts.push({
         tag: 'script',
         // tried render blocking this script tag by data url imports but it gives `/@vite/client: Invalid relative url or base scheme isn't hierarchical.` which could not find a way to fix.
-        attrs: { type: 'module', 'waku-module-id': result.id },
+        attrs: { type: 'module', WAKU_ATTR_NAME: result.id },
         children: result.code,
         injectTo: 'head-prepend',
       });
@@ -193,11 +196,12 @@ async function generateInitialScripts(
     }
     scripts.push({
       tag: 'style',
-      attrs: { type: 'text/css', 'waku-module-id': result.id },
+      attrs: { type: 'text/css', WAKU_ATTR_NAME: result.id },
       children: result.source,
-      injectTo: 'head-prepend',
+      injectTo: 'body',
     });
   }
+
   return scripts;
 }
 
@@ -211,9 +215,8 @@ export function hotUpdate(vite: ViteDevServer, payload: HotUpdatePayload) {
   if (payload.type === 'full-reload') {
     vite.hot.send(payload);
   } else if (payload.event === 'rsc-reload') {
+    modulePendingMap.get(vite)?.clear();
     vite.hot.send(payload);
-  } else if (payload.event === 'hot-import') {
-    hotImport(vite, payload.data);
   } else if (payload.event === 'module-import') {
     moduleImport(vite, payload.data);
   }
